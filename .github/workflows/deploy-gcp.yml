@@ -49,8 +49,10 @@ jobs:
           image: ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.REPO_NAME }}/${{ env.BACKEND_SERVICE }}:${{ github.sha }}
           env_vars: |
             GEMINI_API_KEY=${{ secrets.GEMINI_API_KEY }}
+            MAPS_API_KEY=${{ secrets.MAPS_API_KEY }}
           flags: |
             --allow-unauthenticated
+            --port=8080
             --timeout=15m
             --max-instances=5
             --memory=512Mi

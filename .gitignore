@@ -40,3 +40,10 @@ yarn-error.log*
 coverage/
 .coverage
 htmlcov/
+
+# Database files (re-seeded on startup)
+*.db
+*.sqlite
+
+# Duplicate lock file (project uses pnpm)
+frontend/package-lock.json

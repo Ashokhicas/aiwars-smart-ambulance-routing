@@ -2,8 +2,8 @@ param (
     [Parameter(Mandatory=$true)]
     [string]$ProjectId,
 
-    [Parameter(Mandatory=$true)]
-    [string]$GeminiApiKey,
+    [Parameter(Mandatory=$false)]
+    [string]$GeminiApiKey = "",
 
     [Parameter(Mandatory=$false)]
     [string]$MapsApiKey = "",
@@ -14,14 +14,62 @@ param (
     [string]$FrontendService = "ambulai-frontend"
 )
 
-Write-Host "Starting GCP Deployment for AmbulAI" -ForegroundColor Cyan
+# ---------------------------------------------------------------------------
+# Helper: parse KEY=VALUE lines from a .env file
+# ---------------------------------------------------------------------------
+function Read-EnvFile {
+    param([string]$Path)
+    $vars = @{}
+    if (Test-Path $Path) {
+        Get-Content $Path | ForEach-Object {
+            # Skip blank lines and comments
+            if ($_ -match '^\s*([^#\s][^=]*?)\s*=\s*(.*?)\s*$') {
+                $vars[$matches[1]] = $matches[2]
+            }
+        }
+    }
+    return $vars
+}
 
-# 1. Set Project
+# ---------------------------------------------------------------------------
+# Resolve API keys: CLI param > .env file > error
+# ---------------------------------------------------------------------------
+$envFile = Join-Path $PSScriptRoot ".env"
+$envVars = Read-EnvFile -Path $envFile
+
+if (-not $GeminiApiKey) {
+    $GeminiApiKey = $envVars["GEMINI_API_KEY"]
+}
+if (-not $MapsApiKey) {
+    $MapsApiKey = $envVars["MAPS_API_KEY"]
+}
+
+if (-not $GeminiApiKey) {
+    Write-Host "ERROR: GEMINI_API_KEY not found. Pass -GeminiApiKey or set it in .env" -ForegroundColor Red
+    exit 1
+}
+if (-not $MapsApiKey) {
+    Write-Host "WARNING: MAPS_API_KEY not set. Map features will require the key to be configured later." -ForegroundColor Yellow
+}
+
+Write-Host ""
+Write-Host "Starting GCP Deployment for AmbulAI" -ForegroundColor Cyan
+Write-Host "  Project : $ProjectId" -ForegroundColor Gray
+Write-Host "  Region  : $Region" -ForegroundColor Gray
+Write-Host "  Gemini  : $($GeminiApiKey.Substring(0, [Math]::Min(8, $GeminiApiKey.Length)))..." -ForegroundColor Gray
+Write-Host "  Maps    : $(if ($MapsApiKey) { $MapsApiKey.Substring(0, [Math]::Min(8, $MapsApiKey.Length)) + '...' } else { '(not set)' })" -ForegroundColor Gray
+Write-Host ""
+
+# ---------------------------------------------------------------------------
+# 1. Set Project & enable required APIs
+# ---------------------------------------------------------------------------
 Write-Host "=> Setting GCP Project" -ForegroundColor Yellow
 gcloud config set project $ProjectId
 gcloud services enable run.googleapis.com artifactregistry.googleapis.com cloudbuild.googleapis.com
 
-# 2. Check/Create Artifact Registry Repository
+# ---------------------------------------------------------------------------
+# 2. Ensure Artifact Registry repository exists
+# ---------------------------------------------------------------------------
 Write-Host "=> Configuring Artifact Registry" -ForegroundColor Yellow
 $repoExists = gcloud artifacts repositories describe $RepoName --location=$Region --format="value(name)" 2>$null
 if (-not $repoExists) {
@@ -32,12 +80,14 @@ if (-not $repoExists) {
     Write-Host "   Created repository: $RepoName" -ForegroundColor Green
 }
 
-# Configure Docker auth for Artifact Registry
 gcloud auth configure-docker "${Region}-docker.pkg.dev" --quiet
 
+# ---------------------------------------------------------------------------
 # 3. Build & Deploy Backend
+# ---------------------------------------------------------------------------
 $BackendImage = "${Region}-docker.pkg.dev/${ProjectId}/${RepoName}/${BackendService}:latest"
-Write-Host "=> Submitting Backend to Google Cloud Build" -ForegroundColor Yellow
+
+Write-Host "=> Building Backend image via Cloud Build" -ForegroundColor Yellow
 gcloud builds submit --tag $BackendImage ./backend --quiet
 if ($LASTEXITCODE -ne 0) {
     Write-Host "Backend build failed. Aborting." -ForegroundColor Red
@@ -60,11 +110,14 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 $BackendUrl = gcloud run services describe $BackendService --platform managed --region $Region --format="value(status.url)"
-Write-Host "   Backend is live at: $BackendUrl" -ForegroundColor Green
+Write-Host "   Backend live: $BackendUrl" -ForegroundColor Green
 
+# ---------------------------------------------------------------------------
 # 4. Build & Deploy Frontend
+# ---------------------------------------------------------------------------
 $FrontendImage = "${Region}-docker.pkg.dev/${ProjectId}/${RepoName}/${FrontendService}:latest"
-Write-Host "=> Submitting Frontend to Google Cloud Build" -ForegroundColor Yellow
+
+Write-Host "=> Building Frontend image via Cloud Build" -ForegroundColor Yellow
 gcloud builds submit --tag $FrontendImage ./frontend --quiet
 if ($LASTEXITCODE -ne 0) {
     Write-Host "Frontend build failed. Aborting." -ForegroundColor Red
@@ -87,9 +140,11 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 $FrontendUrl = gcloud run services describe $FrontendService --platform managed --region $Region --format="value(status.url)"
-Write-Host "`n===============================================" -ForegroundColor Green
-Write-Host "  AMBULAI DEPLOYMENT COMPLETED" -ForegroundColor Green
+
+Write-Host ""
 Write-Host "===============================================" -ForegroundColor Green
-Write-Host "Backend API: $BackendUrl" -ForegroundColor Cyan
-Write-Host "Frontend Portal: $FrontendUrl" -ForegroundColor Cyan
-Write-Host "Click the Frontend Portal link above to launch your application in production." -ForegroundColor Yellow
+Write-Host "  AMBULAI DEPLOYMENT COMPLETE" -ForegroundColor Green
+Write-Host "===============================================" -ForegroundColor Green
+Write-Host "Backend  : $BackendUrl" -ForegroundColor Cyan
+Write-Host "Frontend : $FrontendUrl" -ForegroundColor Cyan
+Write-Host ""
