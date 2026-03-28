@@ -96,8 +96,12 @@ function App() {
   const [viewState, setViewState] = useState<ViewState>('idle');
   const [fleet, setFleet] = useState<{ ambulances: any[]; hospitals: any[] }>({ ambulances: [], hospitals: [] });
   const [mapCenter, setMapCenter] = useState({ lat: 12.9724, lng: 77.6169 });
-  const [dynamicMapKey, setDynamicMapKey] = useState<string>('API_KEY_REQUIRED');
+  const [dynamicMapKey, setDynamicMapKey] = useState<string>('');
   const [isConfigLoaded, setIsConfigLoaded] = useState(false);
+  // Only true when we actually have a validated, non-placeholder API key.
+  // APIProvider must NOT be rendered until this is true — an invalid/empty key
+  // triggers InvalidKeyMapError and crashes the Google Maps SDK.
+  const [hasValidMapKey, setHasValidMapKey] = useState(false);
 
   // Journey tracking
   const [journey, setJourney] = useState<any[]>([]);
@@ -197,20 +201,33 @@ function App() {
   }, [startAmbulanceAnimation]);
 
   useEffect(() => {
-    const timeout = setTimeout(() => setIsConfigLoaded(true), 2000);
+    // Fallback: mark config as loaded after 3s so the rest of the UI isn't blocked
+    // even if the backend is slow, but do NOT set hasValidMapKey — that only happens
+    // when we can confirm a real key was returned.
+    const timeout = setTimeout(() => setIsConfigLoaded(true), 3000);
+
+    const isValid = (k: unknown): k is string =>
+      typeof k === 'string' && k.trim().length > 10 &&
+      !k.startsWith('your_') && k !== 'API_KEY_REQUIRED' && !k.includes('placeholder');
+
     fetch('/api/v1/config')
       .then(r => r.ok ? r.json() : {})
       .then((data: any) => {
         const backendKey = data?.maps_api_key;
         const localKey = import.meta.env.VITE_MAPS_API_KEY;
-        const isValid = (k: string) => k && k.trim() !== '' && !k.startsWith('your_') && k !== 'API_KEY_REQUIRED';
         const key = isValid(backendKey) ? backendKey : (isValid(localKey) ? localKey : null);
-        if (key) setDynamicMapKey(key);
+        if (key) {
+          setDynamicMapKey(key);
+          setHasValidMapKey(true);
+        }
         setIsConfigLoaded(true);
       })
       .catch(() => {
         const localKey = import.meta.env.VITE_MAPS_API_KEY;
-        if (localKey && !localKey.startsWith('your_')) setDynamicMapKey(localKey);
+        if (isValid(localKey)) {
+          setDynamicMapKey(localKey);
+          setHasValidMapKey(true);
+        }
         setIsConfigLoaded(true);
       });
 
@@ -514,7 +531,27 @@ function App() {
 
       {/* ===== CENTER PANEL — LIVE MAP ===== */}
       <div className="flex-1 relative bg-slate-200 overflow-hidden">
-        {isConfigLoaded ? (
+        {!isConfigLoaded ? (
+          /* Still waiting for /api/v1/config response */
+          <div className="w-full h-full flex flex-col items-center justify-center text-slate-500">
+            <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-slate-400 mb-4" role="status" aria-label="Loading map configuration" />
+            <p className="text-sm">Checking Map License...</p>
+          </div>
+        ) : !hasValidMapKey ? (
+          /* Config loaded but no valid API key was found */
+          <div className="w-full h-full flex flex-col items-center justify-center bg-slate-100 text-slate-500 gap-3 p-8">
+            <MapIcon className="w-16 h-16 opacity-20" aria-hidden="true" />
+            <p className="text-base font-semibold text-slate-700">Google Maps API Key Required</p>
+            <p className="text-sm text-center max-w-xs">
+              Set <code className="bg-slate-200 px-1 rounded text-xs">MAPS_API_KEY</code> in your Cloud Run backend environment variables and redeploy,
+              or add it to your <code className="bg-slate-200 px-1 rounded text-xs">.env</code> file for local development.
+            </p>
+            <p className="text-xs text-slate-400 text-center max-w-xs">
+              Enable: Maps JavaScript API + Directions API in Google Cloud Console.
+            </p>
+            {/* Incident & dispatch panels still fully work without the map */}
+          </div>
+        ) : (
           <APIProvider apiKey={dynamicMapKey}>
             <Map
               center={mapCenter}
@@ -589,11 +626,6 @@ function App() {
               )}
             </Map>
           </APIProvider>
-        ) : (
-          <div className="w-full h-full flex flex-col items-center justify-center text-slate-500">
-            <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-slate-400 mb-4" role="status" aria-label="Loading map" />
-            Checking Secure Map License...
-          </div>
         )}
 
         {/* Overlay: Dispatching */}
