@@ -1,0 +1,21 @@
+server {
+    listen ${PORT};
+    server_name localhost;
+
+    location / {
+        root /usr/share/nginx/html;
+        index index.html index.htm;
+        try_files $uri $uri/ /index.html;
+    }
+
+    # Proxy /api exact or matching requests to the FastAPI backend
+    location /api/ {
+        # proxy_pass requires the URL not to have a trailing slash if we want to preserve /api/
+        # Assuming the backend exposes /api/v1/... we pass the full uri
+        proxy_pass ${BACKEND_URL}/api/;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
