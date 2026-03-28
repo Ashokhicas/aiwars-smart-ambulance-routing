@@ -117,8 +117,11 @@ Write-Host "   Backend live: $BackendUrl" -ForegroundColor Green
 # ---------------------------------------------------------------------------
 $FrontendImage = "${Region}-docker.pkg.dev/${ProjectId}/${RepoName}/${FrontendService}:latest"
 
-Write-Host "=> Building Frontend image via Cloud Build" -ForegroundColor Yellow
-gcloud builds submit --tag $FrontendImage ./frontend --quiet
+Write-Host "=> Building Frontend image via Cloud Build (baking Maps API key)" -ForegroundColor Yellow
+gcloud builds submit ./frontend `
+    --config=frontend/cloudbuild.yaml `
+    --substitutions="_IMAGE=$FrontendImage,_MAPS_API_KEY=$MapsApiKey" `
+    --quiet
 if ($LASTEXITCODE -ne 0) {
     Write-Host "Frontend build failed. Aborting." -ForegroundColor Red
     exit 1

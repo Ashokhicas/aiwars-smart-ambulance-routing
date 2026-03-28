@@ -1,0 +1,12 @@
+steps:
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - build
+      - '--build-arg'
+      - 'VITE_MAPS_API_KEY=${_MAPS_API_KEY}'
+      - '-t'
+      - '${_IMAGE}'
+      - '.'
+
+images:
+  - '${_IMAGE}'

@@ -9,6 +9,11 @@ COPY package.json pnpm-lock.yaml ./
 RUN pnpm install --frozen-lockfile
 
 COPY . .
+
+# Accept Maps API key at build time so Vite can bake it into the bundle
+ARG VITE_MAPS_API_KEY=""
+ENV VITE_MAPS_API_KEY=$VITE_MAPS_API_KEY
+
 RUN pnpm run build
 
 # Stage 2: serve
