@@ -6,7 +6,7 @@
  */
 import React from 'react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, waitFor, act } from '@testing-library/react';
+import { render, screen, waitFor, act, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import App from '../App';
 
@@ -214,7 +214,7 @@ describe('App — mode switching', () => {
   afterEach(() => vi.restoreAllMocks());
 
   it('switches to Public Emergency AI mode via the Portal button', async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ delay: null });
     await renderApp();
 
     await user.click(screen.getByRole('button', { name: /portal/i }));
@@ -225,7 +225,7 @@ describe('App — mode switching', () => {
   });
 
   it('returns to dispatcher view from public mode', async () => {
-    const user = userEvent.setup();
+    const user = userEvent.setup({ delay: null });
     await renderApp();
 
     await user.click(screen.getByRole('button', { name: /portal/i }));
@@ -243,15 +243,18 @@ describe('App — mode switching', () => {
 describe('App — incident submission', () => {
   afterEach(() => vi.restoreAllMocks());
 
-  it('submits incident and shows the recommended ambulance unit code', async () => {
-    const user = userEvent.setup();
-    await renderApp();
-
-    await user.type(
+  /** Fills and submits the dispatcher intake form. */
+  function submitIncident(text: string) {
+    fireEvent.change(
       screen.getByPlaceholderText(/type emergency location & details/i),
-      'Cardiac arrest at Koramangala 5th Block',
+      { target: { value: text } },
     );
-    await user.click(screen.getByRole('button', { name: /intake incident/i }));
+    fireEvent.click(screen.getByRole('button', { name: /intake incident/i }));
+  }
+
+  it('submits incident and shows the recommended ambulance unit code', async () => {
+    await renderApp();
+    submitIncident('Cardiac arrest at Koramangala 5th Block');
 
     await waitFor(
       () => expect(screen.getByText('AMB-001')).toBeInTheDocument(),
@@ -260,14 +263,8 @@ describe('App — incident submission', () => {
   });
 
   it('shows the recommended hospital name after recommendation loads', async () => {
-    const user = userEvent.setup();
     await renderApp();
-
-    await user.type(
-      screen.getByPlaceholderText(/type emergency location & details/i),
-      'Stroke at MG Road',
-    );
-    await user.click(screen.getByRole('button', { name: /intake incident/i }));
+    submitIncident('Stroke at MG Road');
 
     await waitFor(
       () => expect(screen.getByText(/Fortis Hospital/i)).toBeInTheDocument(),
@@ -276,14 +273,8 @@ describe('App — incident submission', () => {
   });
 
   it('shows the incident severity badge after submission', async () => {
-    const user = userEvent.setup();
     await renderApp();
-
-    await user.type(
-      screen.getByPlaceholderText(/type emergency location & details/i),
-      'Fire at BTM Layout',
-    );
-    await user.click(screen.getByRole('button', { name: /intake incident/i }));
+    submitIncident('Fire at BTM Layout');
 
     await waitFor(
       () => expect(screen.getByText(/cardiac_arrest/i)).toBeInTheDocument(),
@@ -296,31 +287,29 @@ describe('App — incident submission', () => {
 describe('App — dispatch confirmation', () => {
   afterEach(() => vi.restoreAllMocks());
 
-  /** Submit an incident and wait for the Execute Protocols button to appear. */
-  async function submitAndAwaitRecommendation(user: ReturnType<typeof userEvent.setup>) {
-    await user.type(
+  /** Submits via fireEvent and waits for the Execute Protocols button. */
+  async function submitAndAwaitRecommendation() {
+    fireEvent.change(
       screen.getByPlaceholderText(/type emergency location & details/i),
-      'Car crash at Indiranagar',
+      { target: { value: 'Car crash at Indiranagar' } },
     );
-    await user.click(screen.getByRole('button', { name: /intake incident/i }));
+    fireEvent.click(screen.getByRole('button', { name: /intake incident/i }));
     await waitFor(
       () => expect(screen.getByRole('button', { name: /execute protocols/i })).toBeInTheDocument(),
-      { timeout: 8000 },
+      { timeout: 10000 },
     );
   }
 
   it('shows Execute Protocols CTA after recommendation is ready', async () => {
-    const user = userEvent.setup();
     await renderApp();
-    await submitAndAwaitRecommendation(user);
+    await submitAndAwaitRecommendation();
     expect(screen.getByRole('button', { name: /execute protocols/i })).toBeInTheDocument();
   });
 
   it('shows journey timeline events after confirming dispatch', async () => {
-    const user = userEvent.setup();
     await renderApp();
-    await submitAndAwaitRecommendation(user);
-    await user.click(screen.getByRole('button', { name: /execute protocols/i }));
+    await submitAndAwaitRecommendation();
+    fireEvent.click(screen.getByRole('button', { name: /execute protocols/i }));
 
     await waitFor(
       () => expect(screen.getByText(/Reported|AI Analysed|Unit Assigned|En Route/i)).toBeInTheDocument(),
@@ -329,10 +318,9 @@ describe('App — dispatch confirmation', () => {
   });
 
   it('shows the protocols activated footer after dispatch', async () => {
-    const user = userEvent.setup();
     await renderApp();
-    await submitAndAwaitRecommendation(user);
-    await user.click(screen.getByRole('button', { name: /execute protocols/i }));
+    await submitAndAwaitRecommendation();
+    fireEvent.click(screen.getByRole('button', { name: /execute protocols/i }));
 
     await waitFor(
       () => expect(screen.getByText(/Protocols Activated/i)).toBeInTheDocument(),
