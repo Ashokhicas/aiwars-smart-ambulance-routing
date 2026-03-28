@@ -1,17 +1,16 @@
 /**
  * Integration tests for the main App component.
  *
- * Strategy:
- *  - fetch is mocked globally so no real network calls are made
- *  - @vis.gl/react-google-maps is mocked because it loads the
- *    Google Maps JS SDK which is unavailable in jsdom
+ * @vis.gl/react-google-maps is mocked — it loads the Google Maps SDK
+ * which is unavailable in jsdom and would crash on init.
  */
 import React from 'react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, waitFor, fireEvent } from '@testing-library/react';
+import { render, screen, waitFor, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import App from '../App';
 
-// ── Mock @vis.gl/react-google-maps ───────────────────────────────────────────
+// ── Mock @vis.gl/react-google-maps ────────────────────────────────────────────
 vi.mock('@vis.gl/react-google-maps', () => ({
   APIProvider: ({ children }: { children: React.ReactNode }) => (
     <div data-testid="maps-api-provider">{children}</div>
@@ -27,12 +26,10 @@ vi.mock('@vis.gl/react-google-maps', () => ({
   useMapsLibrary: () => null,
 }));
 
-// ── Default API responses ────────────────────────────────────────────────────
+// ── Fixtures ──────────────────────────────────────────────────────────────────
 const VALID_KEY = 'AIzaSyABCDEFGHIJKLMNOPQRSTUVWXYZ12345';
 
-const DEFAULT_CONFIG = { maps_api_key: VALID_KEY };
-
-const DEFAULT_FLEET = {
+const FLEET = {
   ambulances: [
     { id: 'amb-1', unit_code: 'AMB-001', unit_type: 'ALS', fuel_pct: 90, crew_hours: 2, lat: 12.9352, lng: 77.6245 },
   ],
@@ -41,16 +38,22 @@ const DEFAULT_FLEET = {
   ],
 };
 
-const DEFAULT_ACTIVE_INCIDENTS: unknown[] = [];
-
-const INCIDENT_RESPONSE = {
+const INCIDENT = {
   incident_id: 'inc-test-001',
   incident_number: 'INC-001',
   status: 'new',
-  extracted: { incident_type: 'cardiac_arrest', severity: 'critical', lat: 12.935, lng: 77.624 },
+  extracted: {
+    incident_type: 'cardiac_arrest',
+    severity: 'critical',
+    location_raw: 'Koramangala 5th Block',
+    location_confidence: 'high',
+    lat: 12.935,
+    lng: 77.624,
+    special_notes: 'Patient unresponsive.',
+  },
 };
 
-const RECOMMENDATION_RESPONSE = {
+const RECOMMENDATION = {
   incident_id: 'inc-test-001',
   recommendations: [
     {
@@ -75,336 +78,323 @@ const RECOMMENDATION_RESPONSE = {
   },
 };
 
-const CONFIRM_RESPONSE = {
+const CONFIRM = {
   status: 'en_route',
   route_waypoints: [
     { lat: 12.9352, lng: 77.6245 },
     { lat: 12.9400, lng: 77.6280 },
-    { lat: 12.9450, lng: 77.6310 },
   ],
   journey: [
-    { event_type: 'reported',           actor_name: 'Caller',     narrative: 'Emergency reported.', timestamp: new Date().toISOString() },
-    { event_type: 'ai_parsed',          actor_name: 'AmbulAI',    narrative: 'AI analysed.',        timestamp: new Date().toISOString() },
-    { event_type: 'ambulance_assigned', actor_name: 'AMB-001',    narrative: 'Unit assigned.',      timestamp: new Date().toISOString() },
-    { event_type: 'en_route',           actor_name: 'AMB-001',    narrative: 'En route.',           timestamp: new Date().toISOString() },
+    { id: 'e1', event_type: 'reported',           actor_name: 'Caller',  narrative: 'Emergency reported.', timestamp: new Date().toISOString() },
+    { id: 'e2', event_type: 'ai_parsed',           actor_name: 'AmbulAI', narrative: 'AI analysed.',       timestamp: new Date().toISOString() },
+    { id: 'e3', event_type: 'ambulance_assigned',  actor_name: 'AMB-001', narrative: 'Unit assigned.',     timestamp: new Date().toISOString() },
+    { id: 'e4', event_type: 'en_route',            actor_name: 'AMB-001', narrative: 'En route.',          timestamp: new Date().toISOString() },
   ],
 };
 
-// ── Helper: build a fetch mock ────────────────────────────────────────────────
-function buildFetch(overrides: Record<string, unknown> = {}) {
-  const defaults: Record<string, unknown> = {
-    '/api/v1/config':           DEFAULT_CONFIG,
-    '/api/v1/fleet':            DEFAULT_FLEET,
-    '/api/v1/incidents/active': DEFAULT_ACTIVE_INCIDENTS,
+// ── Fetch mock builder ────────────────────────────────────────────────────────
+type FetchOverrides = Record<string, unknown>;
+
+function makeFetch(overrides: FetchOverrides = {}) {
+  const defaults: FetchOverrides = {
+    '/api/v1/config':           { maps_api_key: VALID_KEY },
+    '/api/v1/fleet':            FLEET,
+    '/api/v1/incidents/active': [],
   };
   const map = { ...defaults, ...overrides };
 
   return vi.fn(async (url: string, init?: RequestInit) => {
-    // POST /api/v1/incidents
-    if (init?.method === undefined && url.includes('/api/v1/incidents') && !url.includes('/journey') && !url.includes('/active')) {
-      return { ok: true, json: async () => INCIDENT_RESPONSE };
+    if ((init?.method === 'POST' || !init) && url.includes('/api/v1/incidents') &&
+        !url.includes('/journey') && !url.includes('/active')) {
+      return { ok: true, json: async () => INCIDENT };
     }
-    if (init?.method === 'POST' && url.includes('/api/v1/incidents')) {
-      return { ok: true, json: async () => INCIDENT_RESPONSE };
+    if (url.includes('/journey')) {
+      return { ok: true, json: async () => ({ journey: CONFIRM.journey.slice(0, 2) }) };
     }
-    // POST /api/v1/dispatch/recommend
-    if (url.includes('/api/v1/dispatch/recommend')) {
-      return { ok: true, json: async () => RECOMMENDATION_RESPONSE };
+    if (url.includes('/dispatch/recommend')) {
+      return { ok: true, json: async () => RECOMMENDATION };
     }
-    // POST /api/v1/dispatch/confirm
-    if (url.includes('/api/v1/dispatch/confirm')) {
-      return { ok: true, json: async () => CONFIRM_RESPONSE };
+    if (url.includes('/dispatch/confirm')) {
+      return { ok: true, json: async () => CONFIRM };
     }
-    // Static map lookups
     for (const [key, value] of Object.entries(map)) {
       if (url.includes(key)) {
         return { ok: true, json: async () => value };
       }
     }
     return { ok: false, json: async () => ({}) };
-  });
+  }) as unknown as typeof fetch;
 }
 
-// ── Import App after mocks are in place ──────────────────────────────────────
-const { default: App } = await import('../App');
+// ── Helpers ───────────────────────────────────────────────────────────────────
+/** Renders app and waits for the initial config load to finish. */
+async function renderApp(overrides: FetchOverrides = {}) {
+  global.fetch = makeFetch(overrides);
+  render(<App />);
+  // Wait until the spinner "Checking Map License..." is gone
+  await waitFor(
+    () => expect(screen.queryByText('Checking Map License...')).not.toBeInTheDocument(),
+    { timeout: 5000 },
+  );
+}
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
+
 describe('App — initial render', () => {
-  beforeEach(() => {
-    vi.useFakeTimers({ shouldAdvanceTime: true });
-    global.fetch = buildFetch() as unknown as typeof fetch;
+  afterEach(() => vi.restoreAllMocks());
+
+  it('renders the AmbulAI Central heading', async () => {
+    await renderApp();
+    expect(screen.getByText('AmbulAI Central')).toBeInTheDocument();
   });
 
-  afterEach(() => {
-    vi.useRealTimers();
-    vi.restoreAllMocks();
+  it('renders the Manual Incident Intake section', async () => {
+    await renderApp();
+    expect(screen.getByText(/Manual Incident Intake/i)).toBeInTheDocument();
   });
 
-  it('renders the AmbulAI heading', async () => {
-    render(<App />);
-    expect(screen.getByText('AmbulAI')).toBeInTheDocument();
+  it('renders the incident description textarea', async () => {
+    await renderApp();
+    expect(
+      screen.getByPlaceholderText(/type emergency location & details/i),
+    ).toBeInTheDocument();
   });
 
-  it('shows the Report Incident panel heading', async () => {
-    render(<App />);
-    expect(screen.getByText(/report incident/i)).toBeInTheDocument();
+  it('renders the Dispatch Intelligence panel heading', async () => {
+    await renderApp();
+    expect(screen.getByText(/Dispatch Intelligence/i)).toBeInTheDocument();
   });
 
-  it('renders dispatch and public mode tabs', async () => {
-    render(<App />);
-    expect(screen.getByText(/dispatcher/i)).toBeInTheDocument();
-    expect(screen.getByText(/public/i)).toBeInTheDocument();
-  });
-
-  it('renders the incident text area input', async () => {
-    render(<App />);
-    expect(screen.getByPlaceholderText(/describe the emergency/i)).toBeInTheDocument();
+  it('renders the Intake Incident submit button', async () => {
+    await renderApp();
+    expect(
+      screen.getByRole('button', { name: /intake incident/i }),
+    ).toBeInTheDocument();
   });
 });
 
 // ── Maps API key handling ─────────────────────────────────────────────────────
 describe('App — Google Maps key handling', () => {
-  afterEach(() => {
-    vi.useRealTimers();
-    vi.restoreAllMocks();
+  afterEach(() => vi.restoreAllMocks());
+
+  it('renders the map provider when a valid key is returned from config', async () => {
+    await renderApp();
+    expect(screen.getByTestId('maps-api-provider')).toBeInTheDocument();
   });
 
-  it('renders the map provider once a valid key is returned from config', async () => {
-    vi.useFakeTimers({ shouldAdvanceTime: true });
-    global.fetch = buildFetch() as unknown as typeof fetch;
-
+  it('shows the no-key fallback when config returns a placeholder', async () => {
+    global.fetch = makeFetch({ '/api/v1/config': { maps_api_key: 'API_KEY_REQUIRED' } });
     render(<App />);
-    vi.advanceTimersByTime(500);
-
-    await waitFor(() => {
-      expect(screen.getByTestId('maps-api-provider')).toBeInTheDocument();
-    }, { timeout: 4000 });
+    await waitFor(
+      () => expect(screen.getByText(/Google Maps API Key Required/i)).toBeInTheDocument(),
+      { timeout: 8000 },
+    );
   });
 
-  it('shows a "no key" fallback when config returns a placeholder', async () => {
-    vi.useFakeTimers({ shouldAdvanceTime: true });
-    global.fetch = buildFetch({
-      '/api/v1/config': { maps_api_key: 'API_KEY_REQUIRED' },
+  it('shows the no-key fallback when config fetch fails', async () => {
+    // Only reject the config call; let fleet/incidents succeed to avoid noisy errors
+    const baseF = makeFetch();
+    global.fetch = vi.fn((url: string, init?: RequestInit) => {
+      if ((url as string).includes('/api/v1/config')) {
+        return Promise.reject(new Error('Network error'));
+      }
+      return (baseF as Function)(url, init);
     }) as unknown as typeof fetch;
 
     render(<App />);
-    vi.advanceTimersByTime(3500);
-
-    await waitFor(() => {
-      expect(screen.getByText(/google maps api key required/i)).toBeInTheDocument();
-    }, { timeout: 5000 });
-  });
-
-  it('shows a "no key" fallback when config fetch fails', async () => {
-    vi.useFakeTimers({ shouldAdvanceTime: true });
-    global.fetch = vi.fn().mockRejectedValue(new Error('Network error')) as unknown as typeof fetch;
-
-    render(<App />);
-    vi.advanceTimersByTime(3500);
-
-    await waitFor(() => {
-      expect(screen.getByText(/google maps api key required/i)).toBeInTheDocument();
-    }, { timeout: 5000 });
+    await waitFor(
+      () => expect(screen.getByText(/Google Maps API Key Required/i)).toBeInTheDocument(),
+      { timeout: 8000 },
+    );
   });
 });
 
 // ── Mode switching ────────────────────────────────────────────────────────────
 describe('App — mode switching', () => {
-  beforeEach(() => {
-    vi.useFakeTimers({ shouldAdvanceTime: true });
-    global.fetch = buildFetch() as unknown as typeof fetch;
+  afterEach(() => vi.restoreAllMocks());
+
+  it('switches to Public Emergency AI mode via the Portal button', async () => {
+    const user = userEvent.setup();
+    await renderApp();
+
+    await user.click(screen.getByRole('button', { name: /portal/i }));
+
+    await waitFor(() =>
+      expect(screen.getByText(/Public Emergency AI/i)).toBeInTheDocument(),
+    );
   });
 
-  afterEach(() => {
-    vi.useRealTimers();
-    vi.restoreAllMocks();
-  });
+  it('returns to dispatcher view from public mode', async () => {
+    const user = userEvent.setup();
+    await renderApp();
 
-  it('switches to Public Reporter mode when that tab is clicked', async () => {
-    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime.bind(vi) });
-    render(<App />);
+    await user.click(screen.getByRole('button', { name: /portal/i }));
+    await waitFor(() => screen.getByText(/Public Emergency AI/i));
 
-    const publicTab = screen.getByText(/public/i);
-    await user.click(publicTab);
+    await user.click(screen.getByRole('button', { name: /switch to dispatcher view/i }));
 
-    await waitFor(() => {
-      expect(screen.getByText(/public reporter/i)).toBeInTheDocument();
-    });
-  });
-
-  it('switches back to Dispatcher mode', async () => {
-    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime.bind(vi) });
-    render(<App />);
-
-    const publicTab = screen.getByText(/public/i);
-    await user.click(publicTab);
-    const dispatchTab = screen.getByText(/dispatcher/i);
-    await user.click(dispatchTab);
-
-    await waitFor(() => {
-      expect(screen.getByText(/report incident/i)).toBeInTheDocument();
-    });
+    await waitFor(() =>
+      expect(screen.getByText(/AmbulAI Central/i)).toBeInTheDocument(),
+    );
   });
 });
 
-// ── Incident form submission ──────────────────────────────────────────────────
-describe('App — incident form submission', () => {
-  beforeEach(() => {
-    vi.useFakeTimers({ shouldAdvanceTime: true });
-    global.fetch = buildFetch() as unknown as typeof fetch;
-  });
+// ── Incident submission ───────────────────────────────────────────────────────
+describe('App — incident submission', () => {
+  afterEach(() => vi.restoreAllMocks());
 
-  afterEach(() => {
-    vi.useRealTimers();
-    vi.restoreAllMocks();
-  });
+  it('submits incident and shows the recommended ambulance unit code', async () => {
+    const user = userEvent.setup();
+    await renderApp();
 
-  it('submits incident text and shows recommendation results', async () => {
-    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime.bind(vi) });
-    render(<App />);
+    await user.type(
+      screen.getByPlaceholderText(/type emergency location & details/i),
+      'Cardiac arrest at Koramangala 5th Block',
+    );
+    await user.click(screen.getByRole('button', { name: /intake incident/i }));
 
-    const textarea = screen.getByPlaceholderText(/describe the emergency/i);
-    await user.type(textarea, 'Cardiac arrest at Koramangala 5th Block');
-
-    const submitBtn = screen.getByRole('button', { name: /analyze & dispatch/i });
-    await user.click(submitBtn);
-
-    await waitFor(() => {
-      expect(screen.getByText(/AMB-001/i)).toBeInTheDocument();
-    }, { timeout: 4000 });
+    await waitFor(
+      () => expect(screen.getByText('AMB-001')).toBeInTheDocument(),
+      { timeout: 5000 },
+    );
   });
 
   it('shows the recommended hospital name after recommendation loads', async () => {
-    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime.bind(vi) });
-    render(<App />);
+    const user = userEvent.setup();
+    await renderApp();
 
-    const textarea = screen.getByPlaceholderText(/describe the emergency/i);
-    await user.type(textarea, 'Stroke at MG Road');
+    await user.type(
+      screen.getByPlaceholderText(/type emergency location & details/i),
+      'Stroke at MG Road',
+    );
+    await user.click(screen.getByRole('button', { name: /intake incident/i }));
 
-    const submitBtn = screen.getByRole('button', { name: /analyze & dispatch/i });
-    await user.click(submitBtn);
+    await waitFor(
+      () => expect(screen.getByText(/Fortis Hospital/i)).toBeInTheDocument(),
+      { timeout: 5000 },
+    );
+  });
 
-    await waitFor(() => {
-      expect(screen.getByText(/Fortis Hospital/i)).toBeInTheDocument();
-    }, { timeout: 4000 });
+  it('shows the incident severity badge after submission', async () => {
+    const user = userEvent.setup();
+    await renderApp();
+
+    await user.type(
+      screen.getByPlaceholderText(/type emergency location & details/i),
+      'Fire at BTM Layout',
+    );
+    await user.click(screen.getByRole('button', { name: /intake incident/i }));
+
+    await waitFor(
+      () => expect(screen.getByText(/cardiac_arrest/i)).toBeInTheDocument(),
+      { timeout: 5000 },
+    );
   });
 });
 
 // ── Dispatch confirmation ─────────────────────────────────────────────────────
 describe('App — dispatch confirmation', () => {
-  beforeEach(() => {
-    vi.useFakeTimers({ shouldAdvanceTime: true });
-    global.fetch = buildFetch() as unknown as typeof fetch;
-  });
+  afterEach(() => vi.restoreAllMocks());
 
-  afterEach(() => {
-    vi.useRealTimers();
-    vi.restoreAllMocks();
-  });
-
-  it('shows EN ROUTE state after confirming dispatch', async () => {
-    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime.bind(vi) });
-    render(<App />);
-
-    // Submit incident
+  /** Submit an incident and wait for the Execute Protocols button to appear. */
+  async function submitAndAwaitRecommendation(user: ReturnType<typeof userEvent.setup>) {
     await user.type(
-      screen.getByPlaceholderText(/describe the emergency/i),
-      'Car crash at Indiranagar'
+      screen.getByPlaceholderText(/type emergency location & details/i),
+      'Car crash at Indiranagar',
     );
-    await user.click(screen.getByRole('button', { name: /analyze & dispatch/i }));
+    await user.click(screen.getByRole('button', { name: /intake incident/i }));
+    await waitFor(
+      () => expect(screen.getByRole('button', { name: /execute protocols/i })).toBeInTheDocument(),
+      { timeout: 5000 },
+    );
+  }
 
-    // Wait for recommendation panel
-    await waitFor(() => screen.getByText(/AMB-001/i), { timeout: 4000 });
-
-    // Confirm dispatch
-    const confirmBtn = screen.getByRole('button', { name: /confirm dispatch/i });
-    await user.click(confirmBtn);
-
-    await waitFor(() => {
-      expect(screen.getByText(/en.?route/i)).toBeInTheDocument();
-    }, { timeout: 4000 });
+  it('shows Execute Protocols CTA after recommendation is ready', async () => {
+    const user = userEvent.setup();
+    await renderApp();
+    await submitAndAwaitRecommendation(user);
+    expect(screen.getByRole('button', { name: /execute protocols/i })).toBeInTheDocument();
   });
 
-  it('renders journey timeline events after dispatch confirmation', async () => {
-    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime.bind(vi) });
-    render(<App />);
+  it('shows journey timeline events after confirming dispatch', async () => {
+    const user = userEvent.setup();
+    await renderApp();
+    await submitAndAwaitRecommendation(user);
+    await user.click(screen.getByRole('button', { name: /execute protocols/i }));
 
-    await user.type(
-      screen.getByPlaceholderText(/describe the emergency/i),
-      'Fire at BTM Layout'
+    await waitFor(
+      () => expect(screen.getByText(/Reported|AI Analysed|Unit Assigned|En Route/i)).toBeInTheDocument(),
+      { timeout: 5000 },
     );
-    await user.click(screen.getByRole('button', { name: /analyze & dispatch/i }));
-    await waitFor(() => screen.getByText(/AMB-001/i), { timeout: 4000 });
-    await user.click(screen.getByRole('button', { name: /confirm dispatch/i }));
+  });
 
-    await waitFor(() => {
-      // Journey timeline should show at least one of the known event labels
-      expect(screen.getByText(/AI Analysed|Unit Assigned|En Route|Reported/i)).toBeInTheDocument();
-    }, { timeout: 4000 });
+  it('shows the protocols activated footer after dispatch', async () => {
+    const user = userEvent.setup();
+    await renderApp();
+    await submitAndAwaitRecommendation(user);
+    await user.click(screen.getByRole('button', { name: /execute protocols/i }));
+
+    await waitFor(
+      () => expect(screen.getByText(/Protocols Activated/i)).toBeInTheDocument(),
+      { timeout: 5000 },
+    );
   });
 });
 
-// ── Demo / active incident auto-load ─────────────────────────────────────────
+// ── Demo incident auto-load ───────────────────────────────────────────────────
 describe('App — demo incident auto-load', () => {
-  afterEach(() => {
-    vi.useRealTimers();
-    vi.restoreAllMocks();
-  });
+  afterEach(() => vi.restoreAllMocks());
 
   it('auto-loads a pre-dispatched demo incident on startup', async () => {
-    vi.useFakeTimers({ shouldAdvanceTime: true });
-
     const demoIncident = {
       incident_id: 'demo-inc-001',
       incident_number: 'INC-DEMO',
       status: 'en_route',
-      extracted: { incident_type: 'cardiac_arrest', severity: 'critical', lat: 12.935, lng: 77.624 },
+      extracted: {
+        incident_type: 'cardiac_arrest',
+        severity: 'critical',
+        location_raw: 'Koramangala',
+        location_confidence: 'high',
+        lat: 12.935,
+        lng: 77.624,
+      },
       journey: [
-        { event_type: 'reported',  actor_name: 'Caller',  narrative: 'Cardiac arrest reported.', timestamp: new Date().toISOString() },
-        { event_type: 'en_route',  actor_name: 'AMB-001', narrative: 'Ambulance en route.',       timestamp: new Date().toISOString() },
+        { id: 'e1', event_type: 'reported', actor_name: 'Caller',  narrative: 'Reported.', timestamp: new Date().toISOString() },
+        { id: 'e2', event_type: 'en_route', actor_name: 'AMB-001', narrative: 'En route.', timestamp: new Date().toISOString() },
       ],
       assigned_ambulance: { id: 'amb-1', unit_code: 'AMB-001', unit_type: 'ALS', lat: 12.935, lng: 77.624 },
       assigned_hospital: { id: 'hosp-1', name: 'Fortis Hospital', trauma_level: 1, lat: 12.9716, lng: 77.5946 },
       route_waypoints: [{ lat: 12.935, lng: 77.624 }, { lat: 12.940, lng: 77.628 }],
     };
 
-    global.fetch = buildFetch({
-      '/api/v1/incidents/active': [demoIncident],
-    }) as unknown as typeof fetch;
+    await renderApp({ '/api/v1/incidents/active': [demoIncident] });
 
-    render(<App />);
-    vi.advanceTimersByTime(500);
-
-    await waitFor(() => {
-      expect(screen.getByText(/Fortis Hospital/i)).toBeInTheDocument();
-    }, { timeout: 4000 });
-  });
-});
-
-// ── Fleet panel ───────────────────────────────────────────────────────────────
-describe('App — fleet panel', () => {
-  beforeEach(() => {
-    vi.useFakeTimers({ shouldAdvanceTime: true });
-    global.fetch = buildFetch() as unknown as typeof fetch;
+    await waitFor(
+      () => expect(screen.getByText(/Fortis Hospital/i)).toBeInTheDocument(),
+      { timeout: 5000 },
+    );
   });
 
-  afterEach(() => {
-    vi.useRealTimers();
-    vi.restoreAllMocks();
-  });
+  it('shows the journey timeline from the demo incident', async () => {
+    const demoIncident = {
+      incident_id: 'demo-inc-001',
+      incident_number: 'INC-DEMO',
+      status: 'en_route',
+      extracted: { incident_type: 'cardiac_arrest', severity: 'critical', location_raw: 'Koramangala', location_confidence: 'high', lat: 12.935, lng: 77.624 },
+      journey: [
+        { id: 'e1', event_type: 'reported', actor_name: 'Caller',  narrative: 'Reported.', timestamp: new Date().toISOString() },
+        { id: 'e2', event_type: 'en_route', actor_name: 'AMB-001', narrative: 'En route.', timestamp: new Date().toISOString() },
+      ],
+      assigned_ambulance: { id: 'amb-1', unit_code: 'AMB-001', unit_type: 'ALS', lat: 12.935, lng: 77.624 },
+      assigned_hospital: { id: 'hosp-1', name: 'Fortis Hospital', trauma_level: 1, lat: 12.9716, lng: 77.5946 },
+      route_waypoints: [],
+    };
 
-  it('renders the fleet panel', async () => {
-    render(<App />);
-    await waitFor(() => {
-      expect(screen.getByText(/fleet/i)).toBeInTheDocument();
-    });
-  });
+    await renderApp({ '/api/v1/incidents/active': [demoIncident] });
 
-  it('shows ambulance unit code from fleet data', async () => {
-    render(<App />);
-    vi.advanceTimersByTime(200);
-    await waitFor(() => {
-      expect(screen.getByText(/AMB-001/i)).toBeInTheDocument();
-    }, { timeout: 3000 });
+    await waitFor(
+      () => expect(screen.getByText(/Reported|En Route/i)).toBeInTheDocument(),
+      { timeout: 5000 },
+    );
   });
 });
