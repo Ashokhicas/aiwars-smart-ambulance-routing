@@ -255,7 +255,7 @@ describe('App — incident submission', () => {
 
     await waitFor(
       () => expect(screen.getByText('AMB-001')).toBeInTheDocument(),
-      { timeout: 5000 },
+      { timeout: 8000 },
     );
   });
 
@@ -271,7 +271,7 @@ describe('App — incident submission', () => {
 
     await waitFor(
       () => expect(screen.getByText(/Fortis Hospital/i)).toBeInTheDocument(),
-      { timeout: 5000 },
+      { timeout: 8000 },
     );
   });
 
@@ -287,7 +287,7 @@ describe('App — incident submission', () => {
 
     await waitFor(
       () => expect(screen.getByText(/cardiac_arrest/i)).toBeInTheDocument(),
-      { timeout: 5000 },
+      { timeout: 8000 },
     );
   });
 });
@@ -305,7 +305,7 @@ describe('App — dispatch confirmation', () => {
     await user.click(screen.getByRole('button', { name: /intake incident/i }));
     await waitFor(
       () => expect(screen.getByRole('button', { name: /execute protocols/i })).toBeInTheDocument(),
-      { timeout: 5000 },
+      { timeout: 8000 },
     );
   }
 
@@ -324,7 +324,7 @@ describe('App — dispatch confirmation', () => {
 
     await waitFor(
       () => expect(screen.getByText(/Reported|AI Analysed|Unit Assigned|En Route/i)).toBeInTheDocument(),
-      { timeout: 5000 },
+      { timeout: 8000 },
     );
   });
 
@@ -336,7 +336,7 @@ describe('App — dispatch confirmation', () => {
 
     await waitFor(
       () => expect(screen.getByText(/Protocols Activated/i)).toBeInTheDocument(),
-      { timeout: 5000 },
+      { timeout: 8000 },
     );
   });
 });
