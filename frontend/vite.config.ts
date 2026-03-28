@@ -3,8 +3,10 @@ import react from '@vitejs/plugin-react';
 import path from 'path';
 
 export default defineConfig(({ mode }) => {
-  // Load env variables safely from the parent root folder
-  const env = loadEnv(mode, path.resolve(__dirname, '..'), '');
+  // Load env variables seamlessly from both the parent root folder and local folder
+  const rootEnv = loadEnv(mode, path.resolve(__dirname, '..'), '');
+  const localEnv = loadEnv(mode, __dirname, '');
+  const finalEnv = { ...rootEnv, ...localEnv };
   
   return {
     plugins: [react()],
@@ -15,7 +17,7 @@ export default defineConfig(({ mode }) => {
     },
     // Map the root MAPS_API_KEY seamlessly to the frontend
     define: {
-      'import.meta.env.VITE_MAPS_API_KEY': JSON.stringify(env.MAPS_API_KEY || "")
+      'import.meta.env.VITE_MAPS_API_KEY': JSON.stringify(finalEnv.MAPS_API_KEY || finalEnv.VITE_MAPS_API_KEY || "")
     },
     server: {
       port: 3000,

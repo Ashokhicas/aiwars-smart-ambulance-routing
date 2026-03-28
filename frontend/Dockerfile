@@ -14,10 +14,12 @@ RUN pnpm run build
 # Stage 2: serve
 FROM nginx:alpine AS runtime
 
-# nginx:alpine supports envsubst on templates out of the box
-COPY nginx.conf.template /etc/nginx/templates/default.conf.template
+# Copy template but DO NOT put it in the auto-execute templates folder
+COPY nginx.conf.template /app/nginx.conf.template
 COPY --from=builder /app/dist /usr/share/nginx/html
 
-# Default fallback env vars
 ENV PORT=8080
 ENV BACKEND_URL=http://localhost:8000
+
+# Explicitly substitute the two critical deployment variables universally utilizing standard sed instead of unpredictable Alpine envsubst
+CMD sed -e "s|\${PORT}|$PORT|g" -e "s|\${BACKEND_URL}|$BACKEND_URL|g" /app/nginx.conf.template > /etc/nginx/conf.d/default.conf && nginx -g 'daemon off;'
