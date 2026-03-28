@@ -5,6 +5,9 @@ param (
     [Parameter(Mandatory=$true)]
     [string]$GeminiApiKey,
     
+    [Parameter(Mandatory=$false)]
+    [string]$MapsApiKey = "",
+    
     [string]$Region = "us-central1",
     [string]$RepoName = "ambulai-artifacts",
     [string]$BackendService = "ambulai-backend",
@@ -27,12 +30,10 @@ if (-not $repoExists) {
         --location=$Region `
         --description="AmbulAI Container Registry"
     Write-Host "   Created repository: $RepoName" -ForegroundColor Green
-} else {
-    Write-Host "   Repository $RepoName already exists." -ForegroundColor Green
 }
 
-# 3. Build & Deploy Backend using Cloud Build (No local Docker required)
-$BackendImage = "$Region-docker.pkg.dev/$ProjectId/$RepoName/$BackendService:latest"
+# 3. Build & Deploy Backend
+$BackendImage = "${Region}-docker.pkg.dev/${ProjectId}/${RepoName}/${BackendService}:latest"
 Write-Host "=> Submitting Backend to Google Cloud Build" -ForegroundColor Yellow
 gcloud builds submit --tag $BackendImage ./backend --quiet
 
@@ -44,14 +45,14 @@ gcloud run deploy $BackendService `
     --max-instances=5 `
     --memory=512Mi `
     --cpu=1 `
-    --set-env-vars="GEMINI_API_KEY=$GeminiApiKey"
+    $CloudRunSqlFlag `
+    --set-env-vars="GEMINI_API_KEY=$GeminiApiKey,MAPS_API_KEY=$MapsApiKey,DATABASE_URL=$DatabaseUrl"
 
-# Retrieve Backend URL for Frontend integration
 $BackendUrl = gcloud run services describe $BackendService --platform managed --region $Region --format="value(status.url)"
 Write-Host "   Backend is live at: $BackendUrl" -ForegroundColor Green
 
-# 4. Build & Deploy Frontend using Cloud Build
-$FrontendImage = "$Region-docker.pkg.dev/$ProjectId/$RepoName/$FrontendService:latest"
+# 4. Build & Deploy Frontend
+$FrontendImage = "${Region}-docker.pkg.dev/${ProjectId}/${RepoName}/${FrontendService}:latest"
 Write-Host "=> Submitting Frontend to Google Cloud Build" -ForegroundColor Yellow
 gcloud builds submit --tag $FrontendImage ./frontend --quiet
 
